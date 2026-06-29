@@ -2,6 +2,12 @@
 
 A production-ready AI voice agent for healthcare appointment management. Patients call in, talk to **Aria** (the AI receptionist), and can book, view, cancel, or reschedule appointments — all by voice, in real time.
 
+## Screenshots
+
+| Tool Activity — live tool calls during a booking | Conversation — full live transcript |
+|---|---|
+| ![Tool Activity tab](images/image.png) | ![Conversation tab](images/image%20copy.png) |
+
 ---
 
 ## Table of Contents
