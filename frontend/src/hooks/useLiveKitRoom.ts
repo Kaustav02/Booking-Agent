@@ -110,14 +110,26 @@ export function useLiveKitRoom() {
         };
         store.addToolCall(toolCall);
       } else if (event.type === "tool_result") {
-        store.addToolCall({
-          id: `${event.tool}-${Date.now()}`,
-          tool: event.tool || "",
-          status: "completed",
-          message: event.message || "",
-          data: event.data,
-          timestamp: event.timestamp,
-        });
+        const toolCalls = useAppStore.getState().toolCalls;
+        const pending = toolCalls.find(
+          (t) => t.tool === event.tool && t.status === "in_progress"
+        );
+        if (pending) {
+          store.updateToolCall(pending.id, {
+            status: "completed",
+            message: event.message || "",
+            data: event.data,
+          });
+        } else {
+          store.addToolCall({
+            id: `${event.tool}-${Date.now()}`,
+            tool: event.tool || "",
+            status: "completed",
+            message: event.message || "",
+            data: event.data,
+            timestamp: event.timestamp,
+          });
+        }
       } else if (event.type === "summary") {
         const d = event.data as Record<string, unknown>;
         store.setSummary({

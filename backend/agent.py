@@ -45,31 +45,26 @@ from database import (
 log.info("Agent module loading — initialising database")
 init_db()
 
-SYSTEM_PROMPT = """You are Aria, a warm and professional AI healthcare front-desk assistant for Mykare Health Clinic.
+SYSTEM_PROMPT = """You are Aria, a warm AI front-desk assistant for Mykare Health Clinic.
 
-Your goal is to help patients book, manage, and cancel appointments efficiently.
+TODAY: {today} | HOURS: Mon–Sat, 9 AM – 5 PM
 
-TODAY'S DATE: {today}
-CLINIC HOURS: Monday–Saturday, 9 AM – 5 PM
+FLOW:
+1. Greet and introduce yourself
+2. Get patient name + phone number → call identify_user immediately
+3. Understand need: book / view / cancel / modify / summarize
+4. Call the right tool, confirm the result clearly
+5. When done, call end_conversation with a short summary
 
-CONVERSATION FLOW:
-1. Greet warmly and introduce yourself as Aria
-2. Ask for name AND phone number early (needed for identify_user tool)
-3. Call identify_user tool immediately after getting phone number
-4. Understand the patient's need (book / check / cancel / modify appointment)
-5. Use the appropriate tools
-6. Confirm all actions clearly
-7. When conversation is complete, call end_conversation
+TOOLS: identify_user, fetch_slots, book_appointment, retrieve_appointments, cancel_appointment, modify_appointment, summarize_conversation, end_conversation
 
 RULES:
-- Keep responses to 1-3 sentences — you're on a phone call
-- Always confirm appointment details (date, time) before booking
-- After booking/cancelling/modifying, always confirm to the patient
-- Extract: name, phone, date, time, intent from conversation
-- Never book without calling identify_user first
-- If a slot is unavailable, suggest alternatives from fetch_slots
+- 1-3 sentences per response (phone call)
+- Never book without identify_user first
+- Always confirm date + time before booking
+- Offer alternatives from fetch_slots if slot unavailable
 
-TONE: Warm, empathetic, professional — like a kind receptionist."""
+TONE: Warm, professional, concise."""
 
 
 class HealthcareAgent(Agent):
@@ -340,7 +335,7 @@ class HealthcareAgent(Agent):
         )
 
         try:
-            result = modify_appointment_by_id(self._user_id, appointment_id, new_date.strip(), new_time.strip())
+            result = modify_appointment_by_id(appointment_id, self._user_id, new_date.strip(), new_time.strip())
             success = result["success"]
             msg = "Rescheduled" if success else result.get("error", "Error")
             await self._emit("tool_result", "modify_appointment", msg, result)
@@ -356,6 +351,48 @@ class HealthcareAgent(Agent):
             )
             await self._emit("tool_result", "modify_appointment", f"Error: {exc}")
             return json.dumps({"success": False, "error": str(exc)})
+
+    @function_tool
+    async def summarize_conversation(self) -> str:
+        """
+        Summarize the conversation so far. Call when the patient asks what was discussed,
+        or to confirm actions taken before ending the call.
+        """
+        t0 = self._tool_start_log("summarize_conversation", turns=len(self._transcript))
+        await self._emit("tool_start", "summarize_conversation", "Summarising conversation...")
+
+        try:
+            appointments = get_user_appointments(self._user_id) if self._user_id else []
+            active = [a for a in appointments if a["status"] == "booked"]
+
+            turns = [
+                f"{t['role'].upper()}: {t['text']}" for t in self._transcript
+            ]
+            summary_text = (
+                f"Patient: {self._user_name or 'Unknown'} | Phone: {self._user_phone or 'Unknown'}\n"
+                f"Active appointments: {len(active)}\n"
+                f"Conversation ({len(turns)} turns):\n" + "\n".join(turns[-20:])  # last 20 turns
+            )
+
+            payload = {
+                "session_id": self._session_id,
+                "patient_name": self._user_name,
+                "phone": self._user_phone,
+                "turns": len(self._transcript),
+                "active_appointments": active,
+                "summary_text": summary_text,
+                "timestamp": datetime.now().isoformat(),
+            }
+            await self._emit("summary", "", "Mid-call summary", payload)
+            self._tool_end_log("summarize_conversation", t0, True, turns=len(self._transcript))
+            return json.dumps({"success": True, "turns": len(self._transcript), "active_appointments": len(active)})
+        except Exception as exc:
+            log.error(
+                "summarize_conversation EXCEPTION | session=%s: %s",
+                self._session_id, exc, exc_info=True
+            )
+            await self._emit("tool_result", "summarize_conversation", f"Error: {exc}")
+            return json.dumps({"error": str(exc)})
 
     @function_tool
     async def end_conversation(self, summary: str, user_preferences: str = "", intent: str = "") -> str:
@@ -483,6 +520,7 @@ async def entrypoint(ctx: JobContext):
                 model="sonic-3.5",
                 http_session=cartesia_http,
             ),
+            min_endpointing_delay=0.8,
         )
         log.info("AgentSession built | session=%s", agent._session_id)
     except Exception as exc:
@@ -515,6 +553,7 @@ async def entrypoint(ctx: JobContext):
             "SESSION_CLOSE | session=%s turns=%d reason=%s",
             agent._session_id, len(agent._transcript), ev.reason,
         )
+        shutdown_event.set()
 
     @session.on("error")
     def on_error(ev):

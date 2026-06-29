@@ -13,6 +13,7 @@ tests/
 .pytest_cache/
 pytest.ini
 setup.cfg
+.claude/
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
